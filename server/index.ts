@@ -57,6 +57,12 @@ app.get("/api/health", (_req, res) => {
 // Production: Serve client build (React SPA)
 const clientDist = path.resolve("client/dist");
 app.use(express.static(clientDist));
+
+// Widget route — stripped-down standalone page for CareerONE iframe/widget
+app.get("/rag-widget", (_req, res) => {
+  res.sendFile(path.join(clientDist, "index.html"));
+});
+
 // Express 5 catch-all: use middleware instead of path pattern
 app.use((_req, res, next) => {
   // Only serve index.html for non-API, non-file requests (SPA fallback)
