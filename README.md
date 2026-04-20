@@ -191,6 +191,328 @@ Add the widget to any TVET institution website:
 
 Configure via query params or the widget settings panel.
 
+---
+
+## Developer Guide
+
+This section covers frontend development, API integration, and widget embedding.
+
+### Frontend Development
+
+```bash
+# Terminal 1: Backend
+npm start
+# → http://localhost:4001
+
+# Terminal 2: Frontend (hot reload)
+npm run dev:client
+# → http://localhost:5173
+
+# Production build
+cd client && npm run build
+# → dist/ (served by backend at /rag-widget route)
+```
+
+The frontend Vite dev server proxies `/api/*` requests to `http://localhost:4001`. No CORS issues during development.
+
+**Build widget for embedding:**
+```bash
+cd client && npm run build
+# Output: client/dist/index.html + assets/
+# Serve these files from any static host (NGINX, CDN, etc.)
+```
+
+---
+
+### TypeScript Types
+
+All types match the frontend hooks in `client/src/hooks/`:
+
+```typescript
+// Message shape
+interface Message {
+  role: "user" | "assistant";
+  content: string;       // Markdown content
+  sources?: Source[];    // Attached sources
+  timestamp: string;     // ISO 8601
+}
+
+interface Source {
+  id: number;
+  title: string;
+  content: string;      // Chunk content snippet
+  file_name: string;
+  file_path: string;
+  format: string;       // "pdf" | "docx" | "web" | etc.
+  score: number;        // Relevance score
+  metadata: Record<string, unknown>;
+}
+```
+
+---
+
+### API Integration Examples
+
+#### SSE Streaming Chat (recommended)
+
+```typescript
+async function chat(message: string, sessionId?: string) {
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ message, top_k: 5, search_mode: "auto", session_id: sessionId }),
+  });
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let eventType = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        eventType = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        const data = JSON.parse(line.slice(6));
+
+        if (eventType === "token" && data.text) {
+          // streaming token → append to message
+          console.log("token:", data.text);
+        } else if (eventType === "sources" && data.chunks) {
+          // sources available → render citation UI
+          console.log("sources:", data.chunks);
+        } else if (eventType === "done" && data.session_id) {
+          // conversation complete → save sessionId for continuity
+          console.log("session_id:", data.session_id);
+        }
+      }
+    }
+  }
+}
+```
+
+**curl test:**
+```bash
+curl -X POST http://localhost:4001/api/chat \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{"message": "NVQ Level 4இல் என்ன வேலைகள் கிடைக்கும்?", "top_k": 5}' \
+  -N
+```
+
+#### JSON Polling Fallback (for restricted environments)
+
+```typescript
+async function chatPoll(message: string, sessionId?: string) {
+  const res = await fetch("/api/chat/poll", {
+    method: "POST",
+    headers: { "Content-Type: "application/json; charset=utf-8" },
+    body: JSON.stringify({ message, top_k: 5, search_mode: "auto", session_id: sessionId }),
+  });
+  const data = await res.json();
+  // { session_id, sources_count, chunks: Source[], message: string }
+  return data;
+}
+```
+
+**curl test:**
+```bash
+curl -X POST http://localhost:4001/api/chat/poll \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What careers after NVQ Level 4?", "top_k": 5}'
+```
+
+#### Upload a Document
+
+```typescript
+const formData = new FormData();
+formData.append("file", fileInput.files[0]);
+
+const res = await fetch("/api/upload", { method: "POST", body: formData });
+const data = await res.json();
+// { id, file_name, format, chunks_created, file_size }
+```
+
+#### Search (no LLM)
+
+```bash
+curl -X POST http://localhost:4001/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "NVQ qualification framework", "top_k": 5, "search_mode": "fts"}'
+```
+
+#### Manage Research Scheduler
+
+```bash
+# Check status
+curl http://localhost:4001/api/web-research/status
+
+# Stop all periodic collections
+curl -X POST http://localhost:4001/api/web-research/scheduler/stop
+
+# Resume all collections
+curl -X POST http://localhost:4001/api/web-research/scheduler/start
+
+# Trigger one topic immediately
+curl -X POST http://localhost:4001/api/web-research/topics/21/collect
+```
+
+---
+
+### Widget Integration (Complete Example)
+
+#### Option A: Full-page Widget (iframe embed)
+
+```html
+<!-- In your TVET institution page -->
+<iframe
+  src="https://your-mini-rag-server.com/rag-widget"
+  style="width: 100%; height: 600px; border: none; border-radius: 12px;"
+  allow="microphone"
+></iframe>
+```
+
+#### Option B: Inline Chat Component (React/JS)
+
+```html
+<!-- Minimal widget container -->
+<div id="chat-root"></div>
+
+<script type="module">
+  import React from "https://esm.sh/react@18";
+  import { createRoot } from "https://esm.sh/react-dom@18/client";
+
+  // Embedded widget — no npm install needed
+  const API = "https://your-mini-rag-server.com";
+
+  function CareerChat({ apiEndpoint = `${API}/api/chat` }) {
+    const [messages, setMessages] = React.useState([]);
+    const [input, setInput] = React.useState("");
+    const [sessionId, setSessionId] = React.useState(
+      localStorage.getItem("co-sid") || null
+    );
+
+    async function send(text) {
+      const userMsg = { role: "user", content: text };
+      setMessages(m => [...m, userMsg, { role: "assistant", content: "..." }]);
+
+      const res = await fetch(apiEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, session_id: sessionId }),
+      });
+
+      let assistantText = "";
+      for await (const chunk of res.body) {
+        const text = new TextDecoder().decode(chunk);
+        if (text.startsWith("data: ")) {
+          const d = JSON.parse(text.slice(6));
+          if (d.text) { assistantText += d.text; setMessages(m => m.slice(0,-1).concat({ role:"assistant", content:assistantText })); }
+          if (d.session_id) { setSessionId(d.session_id); localStorage.setItem("co-sid", d.session_id); }
+        }
+      }
+    }
+
+    return React.createElement("div", { className: "chat-wrap" },
+      React.createElement("div", { className: "messages" },
+        messages.map((m, i) => React.createElement("div", { key: i, className: `msg ${m.role}` }, m.content))
+      ),
+      React.createElement("input", {
+        value: input,
+        onChange: e => setInput(e.target.value),
+        onKeyDown: e => e.key === "Enter" && (send(input), setInput("")),
+        placeholder: "Ask about careers, NVQ, skills..."
+      })
+    );
+  }
+
+  createRoot(document.getElementById("chat-root")).render(
+    React.createElement(CareerChat)
+  );
+</script>
+```
+
+#### Option C: Production React Integration
+
+```bash
+cd client
+npm install
+npm run build
+```
+
+Then serve `client/dist/` from your web server. The widget is accessible at `/rag-widget` (full-page) or components in `client/src/components/WidgetChat.tsx` can be imported directly:
+
+```tsx
+// In your existing React app
+import WidgetChat from "./components/WidgetChat";
+import { useWidgetChat } from "./hooks/useWidgetChat";
+
+function MyPage() {
+  const { messages, isStreaming, error, sendMessage, stopStreaming } = useWidgetChat({
+    apiEndpoint: "https://your-mini-rag-server.com/api/chat",
+  });
+
+  return (
+    <WidgetChat
+      messages={messages}
+      isStreaming={isStreaming}
+      onSend={sendMessage}
+      onStop={stopStreaming}
+      error={error}
+      onClearError={() => {}}
+    />
+  );
+}
+```
+
+**Environment variable for API endpoint:**
+```bash
+VITE_API_BASE=https://your-mini-rag-server.com
+```
+Then use `import.meta.env.VITE_API_BASE` in your code.
+
+---
+
+### Tailwind Design System
+
+The widget uses a warm dark theme. Key color tokens:
+
+```js
+// desk (background)
+desk.bg        // #23201b — page background
+desk.surface   // #2b2722 — card surface
+desk.elevated  // #353029 — elevated UI
+
+// amber (accent)
+amber.glow     // #e8a84c — primary accent
+amber.warm     // #d4903a — hover state
+
+// ink (text)
+ink.100        // #f0ebe4 — primary text
+ink.400        // #b09a80 — secondary text
+ink.600        // #86705c — muted text
+```
+
+Custom fonts: `font-display` (Newsreader), `font-body` (Pretendard/Noto Sans KR).
+
+---
+
+### Troubleshooting
+
+**SSE not working?** Use `/api/chat/poll` instead — same results, JSON only.
+
+**CORS errors?** The Vite proxy handles this in dev. In production, either serve the widget from the same origin as the API, or configure CORS headers on the Express server.
+
+**No search results?** Check `GET /api/status` to see if documents are indexed. Use `POST /api/upload` to add documents.
+
+**Model download slow?** The embedding model (~80MB) downloads on first `/api/search` call. Set `HUGGINGFACE_HUB_CACHE` env var to a local path to cache it.
+
 ## API Reference
 
 | Method | Endpoint | Description |
