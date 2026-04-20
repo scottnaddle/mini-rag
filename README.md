@@ -253,6 +253,8 @@ interface Source {
 
 ### API Integration Examples
 
+> **Note:** All `/api/chat` endpoints require `ANTHROPIC_API_KEY` to be set in `.env`. Search, upload, and scheduler endpoints work without it.
+
 #### SSE Streaming Chat (recommended)
 
 ```typescript
