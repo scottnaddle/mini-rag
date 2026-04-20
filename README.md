@@ -14,7 +14,7 @@ Most RAG systems stop at "upload a PDF and ask questions." Mini-RAG goes further
 - **Document generation** — Ask "Create a financial report based on our data" and get a real `.docx` file, not just a chat response.
 - **Multi-agent orchestration** — 11 specialized agents (education, HR, finance, etc.) each with domain-specific skills, automatically selected based on your question.
 - **Career intelligence** — Upload education/certification data and get competency analysis, skill gap reports, and future job recommendations.
-- **Multilingual** — Ask in Korean, English, or Japanese. The system searches Korean-indexed documents even when you ask in English.
+- **Multilingual** — Ask in Korean, English, Japanese, **Sinhala (සිංහල)**, or **Tamil (தமிழ்)**. The system auto-detects the script and expands queries across languages.
 
 ## What Can You Do?
 
@@ -140,16 +140,17 @@ Express Server (Node.js + TypeScript)
 1. **Document Upload** → parsed by format (PDF pages, Excel rows, Markdown headings)
 2. **Excel Special Treatment** → headers preserved in every chunk as markdown tables
 3. **FTS5 Indexing** → immediate, Korean phrase matching optimized
-4. **Vector Embedding** → background async (all-MiniLM-L6-v2, 384 dim)
+4. **Vector Embedding** → background async (paraphrase-multilingual-MiniLM-L12-v2, 384 dim, 50+ languages)
 5. **Query Time**:
    - Server pre-searches with full message + individual keywords + multilingual expansion
+   - Unicode script detection: Sinhala, Tamil, Korean, English, Japanese
    - Results injected into LLM prompt before agent execution
    - Agent can call `search_documents` for additional searches
 
 ### How Agent Routing Works
 
 1. **Keyword Matching** → `skill-router.ts` scores agents by keyword hits
-2. **Multilingual Expansion** → English "education" → Korean "교육" for matching
+2. **Multilingual Expansion** → English "education" → Korean "교육" → Sinhala "අධ්‍යාපනය" / Tamil "கல்வி" for matching
 3. **Dynamic Skill Loading** → only matched agents get their Skills loaded (saves tokens)
 4. **LLM Orchestration** → Claude decides which agent to delegate to
 5. **Pre-Search Injection** → search results included in prompt regardless of agent choice
@@ -225,7 +226,7 @@ DATA_PATH=./data
 DB_PATH=./data/rag.sqlite
 ```
 
-> **Note:** The vector embedding model (`all-MiniLM-L6-v2`) is downloaded automatically on first run (~80MB). No OpenAI key needed — embedding runs locally.
+> **Note:** The vector embedding model (`paraphrase-multilingual-MiniLM-L12-v2`, 384dim) is downloaded automatically on first run (~80MB). No OpenAI key needed — embedding runs locally and supports 50+ languages including Sinhala and Tamil.
 
 ### Step 4: Run
 
@@ -275,6 +276,10 @@ After starting:
 | `DELETE` | `/api/documents/:id` | Delete a document |
 | `GET` | `/api/output-files` | List generated files |
 | `GET` | `/api/files/:name` | Download generated file |
+| `GET` | `/api/web-research/status` | Research scheduler status |
+| `POST` | `/api/web-research/scheduler/stop` | Stop all periodic collections |
+| `POST` | `/api/web-research/scheduler/start` | Restart all enabled collections |
+| `POST` | `/api/web-research/topics/:id/collect` | Trigger immediate collection for a topic |
 
 ### SSE Events (Chat)
 
@@ -310,7 +315,8 @@ mini-rag/
 
 ## Key Design Decisions
 
-- **FTS5 > Vector for Korean** — all-MiniLM-L6-v2 is weak on Korean, so FTS5 gets higher weight (1.5 vs 1.0)
+- **FTS5 > Vector for Korean** — paraphrase-multilingual-MiniLM-L12-v2 supports 50+ languages but FTS5 still leads for Korean, so FTS5 gets higher weight (1.5 vs 1.0)
+- **Multilingual embedding** — replaced English-only all-MiniLM-L6-v2 with paraphrase-multilingual-MiniLM-L12-v2 for Sinhala/Tamil/Korean/Japanese/English cross-language search
 - **Server-side pre-search** — LLM sometimes skips calling search tools, so we always inject search results into the prompt
 - **Excel as markdown tables** — ExcelJS parses sheets into header+row markdown, with headers repeated per chunk for searchability
 - **Dynamic skill loading** — only matched agents load their skills (~5K tokens vs 22K), saving cost per query
