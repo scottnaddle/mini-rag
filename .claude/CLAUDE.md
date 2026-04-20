@@ -27,10 +27,19 @@ npm test              # vitest run (1회)
 npm run test:watch    # vitest (watch mode)
 ```
 
+## 환경 설정
+
+```bash
+cp .env.example .env
+# Edit .env: ANTHROPIC_API_KEY required (from console.anthropic.com)
+```
+
 Python 라이브러리 필요 (문서 생성용):
 ```bash
 pip install python-pptx openpyxl xlsxwriter python-docx reportlab Pillow
 ```
+
+**前提:** Node.js 20+, Python 3.10+
 
 ## 아키텍처
 - **Backend**: Node.js + Express + better-sqlite3 (SQLite FTS5)
@@ -107,6 +116,12 @@ Skills는 markdown 프레임워크로, 에이전트 프롬프트에 동적으로
 
 **동적 로딩**: 모든 11개 에이전트의 Skills를 항상 로드하면 ~22K tokens. `skill-router.ts`로 상위 3개만 선택 시 ~5K tokens.
 
+### 핵심 설계 결정
+- **FTS5 > Vector for Korean** — all-MiniLM-L6-v2 is weak on Korean, so FTS5 gets higher weight (1.5 vs 1.0)
+- **Server-side pre-search** — LLM sometimes skips calling search tools, so search results are always injected into the prompt
+- **Excel as markdown tables** — headers are repeated in every chunk for row/column relationship searchability
+- **Background vector embedding** — FTS5 indexed immediately for fast search, vectors generated async
+
 ## 사용 가능한 도구
 
 ### Custom MCP "rag" 도구
@@ -130,6 +145,15 @@ Skills는 markdown 프레임워크로, 에이전트 프롬프트에 동적으로
 | `memory` | 프로파일링 키워드 감지 시 | 지식 그래프 영속 메모리 |
 | `sequential-thinking` | 분석/비교/전략 키워드 시 | 단계별 추론 |
 | `fetch` | web-research 또는 URL 언급 시 | URL→Markdown 변환 |
+
+### SSE Events (`/api/chat`)
+```
+event: token   → {text: "partial response..."}
+event: status  → {text: "문서 검색...", tool: "mcp__rag__search_documents"}
+event: sources → {chunks: [...], session_id: "..."}
+event: done    → {session_id: "..."}
+event: error   → {error: "message"}
+```
 
 ## 핵심 규칙
 1. 문서 검색 결과에 없는 내용은 절대 지어내지 마세요

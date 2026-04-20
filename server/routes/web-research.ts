@@ -16,6 +16,7 @@ import {
   isTopicScheduled,
   runTopicNow,
   startScheduler,
+  stopScheduler,
 } from "../web-research/scheduler.js";
 import { getDocumentStats } from "../ingestion/indexer.js";
 
@@ -170,6 +171,20 @@ router.get("/api/web-research/topics/:id/runs", (req: Request, res: Response) =>
   const limit = parseInt(req.query.limit as string) || 20;
   const runs = getCollectionRuns(id, limit);
   res.json(runs);
+});
+
+// POST /api/web-research/scheduler/stop — stop all scheduled collections
+router.post("/api/web-research/scheduler/stop", (_req: Request, res: Response) => {
+  stopScheduler();
+  res.json({ success: true, message: "All scheduled collections stopped" });
+});
+
+// POST /api/web-research/scheduler/start — restart all enabled topics
+router.post("/api/web-research/scheduler/start", (_req: Request, res: Response) => {
+  startScheduler();
+  const topics = listTopics();
+  const scheduled = topics.filter((t) => t.enabled && isTopicScheduled(t.id)).length;
+  res.json({ success: true, message: `Scheduler started — ${scheduled}/${topics.length} topics enabled` });
 });
 
 // GET /api/web-research/status — overall research status
